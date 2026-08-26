@@ -9,6 +9,7 @@ Sheets:
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,11 @@ from openpyxl.utils import get_column_letter
 
 HEADER_FILL = PatternFill("solid", start_color="FF1F3864")
 HEADER_FONT = Font(color="FFFFFFFF", bold=True)
+
+# Excel treats a cell whose text starts with one of these as a formula.
+# A customer name of "=1+1" from the database would otherwise be evaluated,
+# and more hostile payloads can create external links.
+FORMULA_PREFIXES = ("=", "+", "@", "\t", "\r")
 
 SEVERITY_FILL = {
     "HIGH": PatternFill("solid", start_color="FFF8CBAD"),
@@ -44,6 +50,18 @@ def _excel_safe(df: pd.DataFrame) -> pd.DataFrame:
         if str(series.dtype) in {"Int64", "Float64", "boolean"} or series.dtype == object:
             out[col] = series.astype(object).where(series.notna(), None)
     return out
+
+
+def _neutralise_formulas(worksheet) -> int:
+    """Force any formula-looking text to be stored as a literal string."""
+    neutralised = 0
+    for row in worksheet.iter_rows():
+        for cell in row:
+            value = cell.value
+            if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+                cell.data_type = "s"
+                neutralised += 1
+    return neutralised
 
 
 def _style_sheet(worksheet, df: pd.DataFrame, status_column: str | None, severity_column: str | None) -> None:
@@ -154,5 +172,14 @@ def write_workbook(result) -> Path:
         _style_sheet(writer.sheets["Summary"], summary_df, None, None)
         _style_sheet(writer.sheets["Exceptions"], exceptions_df, status_column, severity_column)
         _style_sheet(writer.sheets["Run Log"], manifest_df, None, None)
+
+        neutralised = sum(_neutralise_formulas(sheet) for sheet in writer.sheets.values())
+
+    digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
+    output_meta = result.manifest.setdefault("output", {})
+    output_meta["path"] = str(out_path)
+    output_meta["sha256"] = digest
+    if neutralised:
+        output_meta["formula_like_cells_written_as_text"] = neutralised
 
     return out_path

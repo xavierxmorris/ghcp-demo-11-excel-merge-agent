@@ -9,6 +9,7 @@ Two guarantees this module exists to provide:
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -17,11 +18,11 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
 
 from .ingest import IngestError, SourceRead, read_source
-from .schema import ResolutionReport, Schema, SchemaError
+from .schema import ResolutionReport, Schema, SchemaError, is_blank
 from .steps import OPS, PipelineState, StepError, StepLog
+from .yamlio import YamlError, load_yaml
 
 REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
     "filter_rows": ("column", "operator"),
@@ -35,6 +36,21 @@ REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
     "select_columns": ("columns",),
     "rename_output": ("mapping",),
 }
+
+OPTIONAL_PARAMS: dict[str, tuple[str, ...]] = {
+    "filter_rows": ("value",),
+    "deduplicate": ("order_by", "keep"),
+    "merge_environments": ("how", "compare", "coalesce", "tolerance"),
+    "compute": ("decimals",),
+    "derive_status": ("default",),
+    "map_values": ("default",),
+    "add_constant": ("value",),
+    "sort": ("ascending",),
+    "select_columns": (),
+    "rename_output": (),
+}
+
+COMMON_PARAMS = {"id", "op", "description", "applies_to"}
 
 
 class ConfigError(ValueError):
@@ -73,9 +89,10 @@ def sha256_text(text: str) -> str:
 
 def load_config(path: str | Path) -> dict[str, Any]:
     path = Path(path)
-    if not path.exists():
-        raise ConfigError(f"Pipeline config not found: {path}")
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        data = load_yaml(path) or {}
+    except YamlError as exc:
+        raise ConfigError(str(exc)) from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{path} must contain a YAML mapping at the top level.")
     _repair_yaml_bool_keys(data)
@@ -138,6 +155,19 @@ def validate_config(cfg: dict[str, Any]) -> list[str]:
             if step.get(param) is None:
                 raise ConfigError(f"Step {step_id!r} ({op}) is missing required parameter `{param}`.")
 
+        # Reject unknown parameters. Without this, a typo such as `tolerence: 1000`
+        # is accepted and the intended tolerance silently stays at 0.
+        allowed = COMMON_PARAMS | set(REQUIRED_PARAMS.get(op, ())) | set(OPTIONAL_PARAMS.get(op, ()))
+        for param in step:
+            if param in allowed:
+                continue
+            suggestion = difflib.get_close_matches(str(param), sorted(allowed), n=1, cutoff=0.6)
+            hint = f" Did you mean `{suggestion[0]}`?" if suggestion else ""
+            raise ConfigError(
+                f"Step {step_id!r} ({op}) has unknown parameter `{param}`.{hint} "
+                f"Allowed: {', '.join(sorted(allowed))}."
+            )
+
         if op == "merge_environments":
             if merge_seen:
                 raise ConfigError(f"Step {step_id!r}: only one merge_environments step is supported per pipeline.")
@@ -148,6 +178,12 @@ def validate_config(cfg: dict[str, Any]) -> list[str]:
                         f"Step {step_id!r}: `{role}` is {step.get(role)!r}, which is not a declared source "
                         f"({', '.join(sorted(sources))})."
                     )
+            overlap = sorted(set(step.get("compare") or []) & set(step.get("coalesce") or []))
+            if overlap:
+                raise ConfigError(
+                    f"Step {step_id!r}: field(s) {overlap} appear in both `compare` and `coalesce`. "
+                    "Coalescing removes the per-environment values that the comparison is evidence for."
+                )
         elif step.get("applies_to") and merge_seen:
             raise ConfigError(
                 f"Step {step_id!r} uses `applies_to` but runs after the merge. "
@@ -166,6 +202,38 @@ def validate_config(cfg: dict[str, Any]) -> list[str]:
     if not output.get("path"):
         raise ConfigError("`output.path` is required.")
 
+    # Writing the output over one of the inputs would corrupt the next run and
+    # make the manifest's input hash meaningless.
+    output_name = Path(str(output["path"])).name.lower()
+    for name, scfg in sources.items():
+        if Path(str(scfg["path"])).name.lower() == output_name:
+            raise ConfigError(
+                f"`output.path` ({output['path']}) targets the same file as source {name!r}. "
+                "Write output to a separate directory."
+            )
+
+    labels = output.get("exception_labels") or []
+    if labels:
+        classifiers = [s for s in steps if s.get("op") == "derive_status"]
+        if not classifiers:
+            raise ConfigError(
+                "`output.exception_labels` is set but no `derive_status` step produces a classification."
+            )
+        known = {r.get("label") for s in classifiers for r in (s.get("rules") or [])}
+        known |= {s.get("default") for s in classifiers}
+        unknown_labels = sorted({str(x) for x in labels} - {str(k) for k in known if k is not None})
+        if unknown_labels:
+            raise ConfigError(
+                f"`output.exception_labels` lists {unknown_labels}, which no rule or default in "
+                f"`derive_status` can produce. Known labels: {sorted(str(k) for k in known if k)}."
+            )
+        produced = sorted({str(k) for k in known if k} - {str(x) for x in labels})
+        if produced:
+            warnings.append(
+                f"Classification(s) {produced} are never routed to the Exceptions sheet. "
+                "Add them to output.exception_labels if a human must action them."
+            )
+
     return warnings
 
 
@@ -174,6 +242,8 @@ def run_pipeline(
     schema_path: str | Path,
     base_dir: str | Path | None = None,
     strict: bool = True,
+    allow_unparseable: bool = False,
+    out: str | Path | None = None,
 ) -> RunResult:
     config_path, schema_path = Path(config_path), Path(schema_path)
     base = Path(base_dir) if base_dir else config_path.resolve().parent.parent
@@ -209,6 +279,28 @@ def run_pipeline(
                 f"source {report.source!r} has unrecognised header(s) {report.unknown}. "
                 "Add them to config/schema.yaml aliases, or re-run with --no-strict to ignore them."
             )
+        if report.coercion_failures and not allow_unparseable:
+            detail = ", ".join(f"{col} ({count})" for col, count in sorted(report.coercion_failures.items()))
+            blocking.append(
+                f"source {report.source!r} has values that do not match their declared type: {detail}. "
+                "An unparseable value becomes blank, and two blanks compare as EQUAL, so this would "
+                "silently report a false match. Fix the export or the schema type, or pass "
+                "--allow-unparseable to accept the risk (it is recorded in the manifest)."
+            )
+
+    # Blank join keys must be caught before any dedupe step, because
+    # drop_duplicates treats all blanks as one group and would discard rows.
+    for name, frame in frames.items():
+        for key in schema.key:
+            if key not in frame.columns:
+                continue
+            blanks = int(frame[key].map(is_blank).sum())
+            if blanks:
+                blocking.append(
+                    f"source {name!r} has {blanks} row(s) with a blank {key!r}. "
+                    "Blank keys join to each other and merge unrelated records."
+                )
+
     if blocking:
         raise SchemaError("Schema validation failed:\n  - " + "\n  - ".join(blocking))
 
@@ -230,7 +322,19 @@ def run_pipeline(
             raise ConfigError("Pipeline produced no merged frame. Add a merge_environments step.")
 
     output_cfg = cfg.get("output") or {}
-    out_path = Path(output_cfg["path"])
+    exception_labels = [str(x) for x in (output_cfg.get("exception_labels") or [])]
+
+    # If exceptions are configured, the classification must survive select_columns
+    # and rename_output. Otherwise the Summary sheet reads "no classification"
+    # and the CLI cheerfully reports "No exceptions" for a run that computed them.
+    if exception_labels and state.status_column is None:
+        raise ConfigError(
+            "`output.exception_labels` is configured, but the classification column produced by "
+            "`derive_status` was dropped by a later `select_columns` step. The Exceptions sheet "
+            "would be silently empty. Add the classification column back to `select_columns`."
+        )
+
+    out_path = Path(out) if out is not None else Path(output_cfg["path"])
     if not out_path.is_absolute():
         out_path = base / out_path
 
@@ -245,6 +349,7 @@ def run_pipeline(
             "schema_sha256": sha256_text(schema_path.read_text(encoding="utf-8")),
             "schema_version": schema.version,
             "strict": strict,
+            "allow_unparseable": allow_unparseable,
         },
         "run": {
             "started_utc": started.isoformat(timespec="seconds"),
@@ -273,7 +378,7 @@ def run_pipeline(
         manifest=manifest,
         status_column=state.status_column,
         output_path=out_path,
-        exception_labels=[str(x) for x in (output_cfg.get("exception_labels") or [])],
+        exception_labels=exception_labels,
         main_sheet=str(output_cfg.get("main_sheet", "Result")),
     )
     manifest["summary"] = result.status_counts

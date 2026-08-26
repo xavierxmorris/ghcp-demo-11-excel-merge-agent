@@ -14,9 +14,15 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
+
+from .yamlio import load_yaml
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+# Symbols that carry business meaning must survive normalisation, otherwise
+# "Amount %" folds onto "Amount" and a percentage silently maps to a currency
+# field while strict validation reports success.
+_SEMANTIC_SYMBOLS = {"%": " percent ", "#": " number ", "$": " usd ", "\u00a3": " gbp ", "\u20ac": " eur "}
 
 VALID_TYPES = {"string", "integer", "decimal", "boolean", "date", "datetime"}
 VALID_CASES = {"upper", "lower", "title", None}
@@ -26,12 +32,27 @@ def canon_key(header: Any) -> str:
     """Fold a header into a comparison token.
 
     'Request ID', 'REQUEST_ID', 'request  id' and 'req.id' collapse differently
-    only where they genuinely differ, so aliases stay short.
+    only where they genuinely differ, so aliases stay short. Semantic symbols
+    such as % are preserved as words rather than stripped.
     """
     text = "" if header is None else str(header)
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    for symbol, word in _SEMANTIC_SYMBOLS.items():
+        text = text.replace(symbol, word)
     return _NON_ALNUM.sub("_", text.strip().lower()).strip("_")
+
+
+def is_blank(value: Any) -> bool:
+    """True for None, NaN/NaT/NA, and whitespace-only strings."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
 class SchemaError(ValueError):
@@ -110,7 +131,7 @@ class Schema:
         path = Path(path)
         if not path.exists():
             raise SchemaError(f"Schema file not found: {path}")
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = load_yaml(path) or {}
         fields_raw = raw.get("fields") or {}
         if not fields_raw:
             raise SchemaError(f"{path} defines no fields.")
@@ -192,21 +213,30 @@ class Schema:
 def coerce_series(series: pd.Series, spec: FieldSpec) -> tuple[pd.Series, int]:
     """Coerce one column to its declared type. Returns (series, failure_count).
 
-    A 'failure' is a value that was non-null on the way in and null on the way
-    out, i.e. real data we could not parse. Blanks are not failures.
+    A 'failure' is a value that carried content on the way in and is null on the
+    way out, i.e. real data we could not parse. Blank and whitespace-only cells
+    are not failures. This distinction matters: an unparseable value must never
+    be allowed to masquerade as a blank, because two blanks compare as equal.
     """
-    was_present = series.notna()
+    was_present = ~series.map(is_blank)
     if spec.type == "string":
-        out = series.astype("object").map(lambda v: None if pd.isna(v) else str(v))
-        if spec.strip:
-            out = out.map(lambda v: v if v is None else v.strip())
-        if spec.case == "upper":
-            out = out.map(lambda v: v if v is None else v.upper())
-        elif spec.case == "lower":
-            out = out.map(lambda v: v if v is None else v.lower())
-        elif spec.case == "title":
-            out = out.map(lambda v: v if v is None else v.title())
-        out = out.map(lambda v: None if v == "" else v)
+        # One pass, explicit object dtype. Chaining .map() here reintroduces NaN
+        # for None on pandas 3.x, which then breaks .strip().
+        def _clean(value: Any) -> Any:
+            if is_blank(value):
+                return None
+            text = str(value)
+            if spec.strip:
+                text = text.strip()
+            if spec.case == "upper":
+                text = text.upper()
+            elif spec.case == "lower":
+                text = text.lower()
+            elif spec.case == "title":
+                text = text.title()
+            return text or None
+
+        out = pd.Series([_clean(v) for v in series.tolist()], index=series.index, dtype=object)
     elif spec.type in {"integer", "decimal"}:
         cleaned = series.astype("object").map(_strip_numeric_noise)
         out = pd.to_numeric(cleaned, errors="coerce")

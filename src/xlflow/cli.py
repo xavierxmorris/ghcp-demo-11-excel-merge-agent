@@ -136,7 +136,11 @@ def validate(
                 console.print(f"  [red]ambiguous[/red]: {headers} all map to {canonical!r}")
             problems += 1
         for column, count in report.coercion_failures.items():
-            console.print(f"  [yellow]unparseable[/yellow]: {count} value(s) in {column!r}")
+            problems += 1
+            console.print(
+                f"  [red]unparseable[/red]: {count} value(s) in {column!r} do not match the declared type. "
+                "These become blank, and two blanks compare as EQUAL."
+            )
         if report.unknown:
             problems += 1
             console.print(f"  [red]unresolved[/red]: {report.unknown}")
@@ -158,16 +162,19 @@ def run(
     schema: Path = typer.Option(DEFAULT_SCHEMA, "--schema", "-s"),
     out: Path = typer.Option(None, "--out", "-o", help="Override output.path from the config."),
     strict: bool = typer.Option(True, "--strict/--no-strict", help="Fail on unrecognised headers (default: fail)."),
+    allow_unparseable: bool = typer.Option(
+        False, "--allow-unparseable",
+        help="Accept values that do not match their declared type. Recorded in the manifest.",
+    ),
     json_manifest: bool = typer.Option(True, "--manifest/--no-manifest", help="Also write <output>.manifest.json."),
 ) -> None:
     """Execute the pipeline and write the reviewed workbook."""
     try:
-        result = run_pipeline(config, schema, strict=strict)
+        result = run_pipeline(
+            config, schema, strict=strict, allow_unparseable=allow_unparseable, out=out,
+        )
     except (ConfigError, SchemaError, StepError, IngestError) as exc:
         _fail(str(exc))
-
-    if out is not None:
-        result.output_path = out
 
     workbook = write_workbook(result)
     console.print(f"[green]WROTE[/green] {workbook}  ({len(result.frame)} rows)")

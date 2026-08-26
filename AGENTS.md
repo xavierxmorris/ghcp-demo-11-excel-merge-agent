@@ -14,7 +14,7 @@ python -m pip install -e .
 ```powershell
 xlflow validate     # check config + incoming headers; writes nothing; exit 1 on problems
 xlflow run          # writes out/reconciliation.xlsx and out/reconciliation.manifest.json
-python -m pytest -q # 45 tests
+python -m pytest -q # 69 tests
 ```
 
 ## Rules
@@ -24,7 +24,10 @@ python -m pytest -q # 45 tests
 3. Never report counts or totals that did not appear in real command output.
 4. `xlflow validate` must pass before `xlflow run`.
 5. Use `keys:` not `on:` in step config (YAML 1.1 parses bare `on` as `true`).
-6. Engine changes under `src/xlflow/` require tests.
+6. Engine changes under `src/xlflow/` require tests. So do logic changes in YAML.
+7. Confirm with a human before adding a schema alias - it is a business assertion.
+8. `--no-strict`, `--allow-unparseable` and `allow_formulas: true` are incidents,
+   not options. Each turns a hard failure into a silent risk.
 
 ## Layout
 

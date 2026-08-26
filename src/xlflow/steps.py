@@ -228,6 +228,43 @@ def op_deduplicate(state: PipelineState, step: dict[str, Any]) -> StepLog:
     )
 
 
+def _assert_join_keys_usable(step_id: str, source: str, df: pd.DataFrame, keys: list[str]) -> None:
+    """A join is only trustworthy if its keys are present and unique.
+
+    Two failure modes this closes, both of which produce a plausible workbook:
+
+    * Blank keys. pandas happily joins null to null, so two unrelated records
+      with no ID become one row and can be classified OK.
+    * Duplicate keys. An outer join fans out to the cartesian product of the
+      matching rows, inflating counts and inventing mismatches.
+    """
+    from .schema import is_blank
+
+    blank_mask = pd.Series(False, index=df.index)
+    for key in keys:
+        blank_mask = blank_mask | df[key].map(is_blank)
+    blank_count = int(blank_mask.sum())
+    if blank_count:
+        rows = [int(i) + 2 for i in df.index[blank_mask][:5]]
+        raise StepError(
+            f"Step {step_id!r}: source {source!r} has {blank_count} row(s) with a blank join key "
+            f"({keys}); first affected spreadsheet row(s): {rows}. Blank keys join to each other, "
+            "which silently merges unrelated records. Fix the export or filter these rows out "
+            "before the merge."
+        )
+
+    dupes = df.duplicated(subset=keys, keep=False)
+    dupe_count = int(dupes.sum())
+    if dupe_count:
+        samples = df.loc[dupes, keys].drop_duplicates().head(5)
+        listed = ", ".join(" / ".join(str(v) for v in row) for row in samples.itertuples(index=False))
+        raise StepError(
+            f"Step {step_id!r}: source {source!r} has {dupe_count} row(s) sharing a join key "
+            f"({keys}); e.g. {listed}. Joining on a non-unique key multiplies rows. "
+            "Add or fix a `deduplicate` step before the merge."
+        )
+
+
 def op_merge_environments(state: PipelineState, step: dict[str, Any]) -> StepLog:
     left_name, right_name = step.get("left"), step.get("right")
     for role, name in (("left", left_name), ("right", right_name)):
@@ -240,7 +277,18 @@ def op_merge_environments(state: PipelineState, step: dict[str, Any]) -> StepLog
         raise StepError(f"Step {step['id']!r}: `how` must be outer/inner/left/right, got {how!r}.")
     compare = list(step.get("compare") or [])
     coalesce = list(step.get("coalesce") or [])
+
+    overlap = sorted(set(compare) & set(coalesce))
+    if overlap:
+        raise StepError(
+            f"Step {step['id']!r}: field(s) {overlap} appear in both `compare` and `coalesce`. "
+            "Coalescing deletes the per-environment values, destroying the evidence behind the "
+            "comparison. Choose one."
+        )
+
     tolerance = float(step.get("tolerance", 0.0))
+    if tolerance < 0 or tolerance != tolerance or tolerance == float("inf"):
+        raise StepError(f"Step {step['id']!r}: `tolerance` must be a finite number >= 0, got {step.get('tolerance')!r}.")
 
     left = state.frames[left_name].copy()
     right = state.frames[right_name].copy()
@@ -249,6 +297,7 @@ def op_merge_environments(state: PipelineState, step: dict[str, Any]) -> StepLog
         missing = [c for c in on if c not in df.columns]
         if missing:
             raise StepError(f"Step {step['id']!r}: join key(s) {missing} missing from source {name!r}.")
+        _assert_join_keys_usable(step["id"], name, df, on)
 
     left["_in_" + left_name] = True
     right["_in_" + right_name] = True

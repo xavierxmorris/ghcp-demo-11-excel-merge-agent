@@ -102,7 +102,7 @@ def test_manifest_records_inputs_and_every_step(clean_workspace):
     assert {s["source"] for s in manifest["sources"]} == {"esit", "svp"}
     assert all(len(s["sha256"]) == 64 for s in manifest["sources"])
     assert [s["step_id"] for s in manifest["steps"]] == [
-        "drop_cancelled", "dedupe_sources", "merge", "amount_delta",
+        "dedupe_sources", "drop_cancelled", "merge", "amount_delta",
         "classify", "severity", "order", "final_columns", "headers",
     ]
     assert manifest["summary"]["OK"] == 5

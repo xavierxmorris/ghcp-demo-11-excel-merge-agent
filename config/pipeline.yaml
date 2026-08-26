@@ -6,7 +6,7 @@
 #
 # Run:  xlflow run --config config/pipeline.yaml
 
-version: 3
+version: 4
 name: esit-svp-reconciliation
 description: >
   Merge the ESIT and SVP query exports on request_id, compare the fields that
@@ -29,6 +29,18 @@ output:
   exception_labels: [MISSING_IN_SVP, MISSING_IN_ESIT, AMOUNT_MISMATCH, STATUS_MISMATCH, OWNER_MISMATCH, REVIEW]
 
 steps:
+  - id: dedupe_sources
+    op: deduplicate
+    applies_to: [esit, svp]
+    keys: [request_id]
+    order_by: submitted_at
+    keep: last
+    description: >
+      A changed query can return a request more than once; keep the most recent
+      submission. This runs BEFORE the cancelled filter on purpose: latest state
+      wins, so a request cancelled today must not be resurrected by an older
+      approved row that survives the filter.
+
   - id: drop_cancelled
     op: filter_rows
     applies_to: [esit, svp]
@@ -36,14 +48,6 @@ steps:
     operator: not_in
     value: [CANCELLED, VOID]
     description: Cancelled and voided requests are out of scope for reconciliation.
-
-  - id: dedupe_sources
-    op: deduplicate
-    applies_to: [esit, svp]
-    keys: [request_id]
-    order_by: submitted_at
-    keep: last
-    description: A changed query can return a request more than once; keep the most recent submission.
 
   - id: merge
     op: merge_environments

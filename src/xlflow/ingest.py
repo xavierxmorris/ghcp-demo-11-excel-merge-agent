@@ -7,13 +7,45 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import openpyxl
 import pandas as pd
 
 SUPPORTED_SUFFIXES = {".xlsx", ".xlsm", ".csv"}
+EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
 
 
 class IngestError(ValueError):
     pass
+
+
+def detect_formula_cells(path: Path, sheet: Any, limit: int = 8) -> list[str]:
+    """Find cells holding formulas rather than literal values.
+
+    This matters more than it sounds. pandas reads a workbook with
+    data_only=True, which returns the *cached* result of a formula. A file
+    written by a tool and never opened in Excel has no cached result, so the
+    value silently becomes blank - or, as observed, 0. An export containing
+    formulas therefore produces confident, wrong numbers.
+    """
+    workbook = openpyxl.load_workbook(path, data_only=False, read_only=True)
+    try:
+        if isinstance(sheet, int):
+            worksheet = workbook[workbook.sheetnames[sheet]]
+        elif sheet in workbook.sheetnames:
+            worksheet = workbook[sheet]
+        else:
+            return []
+
+        hits: list[str] = []
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    hits.append(str(cell.coordinate))
+                    if len(hits) >= limit:
+                        return hits
+        return hits
+    finally:
+        workbook.close()
 
 
 @dataclass
@@ -66,17 +98,40 @@ def read_source(name: str, cfg: dict[str, Any], base_dir: Path) -> tuple[pd.Data
     sheet = cfg.get("sheet", 0)
     header_row = int(cfg.get("header_row", 0))
 
+    # keep_default_na=False: pandas otherwise converts the literal strings "NA",
+    # "NULL", "N/A", "None" and friends to NaN *before* the schema layer sees
+    # them. A request whose ID is genuinely the string "NULL" would silently
+    # become a null join key. Blank cells still arrive as None from the reader.
     if path.suffix.lower() == ".csv":
-        df = pd.read_csv(path, header=header_row, dtype=object)
+        df = pd.read_csv(path, header=header_row, dtype=object, keep_default_na=False, na_values=[])
     else:
-        df = pd.read_excel(path, sheet_name=sheet, header=header_row, dtype=object, engine="openpyxl")
+        if not bool(cfg.get("allow_formulas", False)):
+            formulas = detect_formula_cells(path, sheet)
+            if formulas:
+                raise IngestError(
+                    f"Source {name!r} ({path.name}) contains formula cells: {', '.join(formulas)}"
+                    f"{' ...' if len(formulas) >= 8 else ''}. Excel files are read for their cached "
+                    "formula results, and a file never opened in Excel has no cached result - the "
+                    "values silently become blank or 0. Re-save the export with Paste Special > "
+                    "Values, or set `allow_formulas: true` on the source if you accept the risk."
+                )
+        df = pd.read_excel(
+            path, sheet_name=sheet, header=header_row, dtype=object,
+            engine="openpyxl", keep_default_na=False, na_values=[],
+        )
 
     if isinstance(df, dict):  # sheet_name=None returns a dict
         raise IngestError(f"Source {name!r}: `sheet` must identify a single sheet, got {sheet!r}.")
 
-    # Excel exports routinely carry fully-blank trailing rows and 'Unnamed: N' spacer columns.
+    df = df.replace({"": None})
     df = df.dropna(how="all")
-    df = df.loc[:, [c for c in df.columns if not str(c).startswith("Unnamed:")]]
+
+    # A blank header becomes 'Unnamed: N'. Dropping those unconditionally would
+    # discard a populated column without it ever reaching validation, so only
+    # drop the genuinely empty spacer columns and let the rest be reported as
+    # unresolved headers.
+    spacers = [c for c in df.columns if str(c).startswith("Unnamed:") and df[c].isna().all()]
+    df = df.drop(columns=spacers)
 
     meta = SourceRead(
         name=name,
