@@ -1,0 +1,78 @@
+# Canonical field dictionary.
+#
+# THIS FILE IS THE ANSWER TO "standardize field names in Excel".
+#
+# The SQL you run against ESIT / SVP will keep changing, and every analyst spells
+# headers differently. Instead of forcing the SQL to be stable, we make the
+# *target* stable: every incoming header is resolved to one canonical field name
+# via `aliases`. Matching is case-, space-, underscore- and punctuation-insensitive.
+#
+# When a new query produces a header nobody has seen before, `xlflow validate`
+# fails loudly and prints a ready-to-paste alias block. You add one line here,
+# commit it, and every teammate's laptop understands the new export after a pull.
+
+version: 4
+
+# Business key used to line ESIT rows up against SVP rows.
+key: [request_id]
+
+fields:
+  request_id:
+    type: string
+    required: true
+    strip: true
+    case: upper
+    description: Primary business key for a request. Must be unique per environment after dedupe.
+    aliases: ["Request ID", "REQUEST_ID", "ReqId", "req id", "RequestNumber", "Request No"]
+
+  customer_name:
+    type: string
+    strip: true
+    description: Customer / counterparty display name.
+    aliases: ["Customer", "Customer Name", "CUST_NAME", "client_name", "Client"]
+
+  status:
+    type: string
+    strip: true
+    case: upper
+    description: Lifecycle state of the request in that environment.
+    aliases: ["Status", "STATUS", "state", "Request Status", "REQ_STATUS"]
+
+  amount:
+    type: decimal
+    decimals: 2
+    description: Monetary value of the request.
+    aliases: ["Amount", "AMT", "total_amount", "Total Amount", "VALUE", "Gross Amount", "GROSS_AMOUNT_USD"]
+
+  currency:
+    type: string
+    strip: true
+    case: upper
+    description: ISO 4217 currency code.
+    aliases: ["Currency", "CCY", "currency_code", "Curr"]
+
+  owner_email:
+    type: string
+    strip: true
+    case: lower
+    description: Owning analyst mailbox.
+    aliases: ["Owner", "Owner Email", "OWNER_EMAIL", "assigned_to", "Assignee", "Request Owner"]
+
+  cost_centre:
+    type: string
+    strip: true
+    case: upper
+    description: Cost centre code. Added 2026-08 when the SVP query began returning it.
+    aliases: ["Cost Centre", "Cost Center", "COST_CTR", "cc_code"]
+
+  region:
+    type: string
+    strip: true
+    case: upper
+    description: Booking region.
+    aliases: ["Region", "REGION", "geo", "Booking Region"]
+
+  submitted_at:
+    type: datetime
+    description: Submission timestamp; used to pick the winning row when duplicates exist.
+    aliases: ["Submitted", "Submitted At", "SUBMIT_DT", "submitted_date", "Created On"]

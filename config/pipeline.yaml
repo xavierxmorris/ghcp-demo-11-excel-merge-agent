@@ -1,0 +1,145 @@
+# The "stable set of instructions, in step-by-step logic".
+#
+# This file replaces the paragraph you currently retype into Copilot-in-Excel.
+# It is declarative, reviewable in a pull request, and produces byte-identical
+# output for identical input. The agent EDITS this file; the Python code EXECUTES it.
+#
+# Run:  xlflow run --config config/pipeline.yaml
+
+version: 3
+name: esit-svp-reconciliation
+description: >
+  Merge the ESIT and SVP query exports on request_id, compare the fields that
+  matter, classify every row, and emit a reviewed workbook plus an audit trail.
+
+sources:
+  esit:
+    path: inbox/esit.xlsx
+    sheet: 0
+    env: ESIT
+  svp:
+    path: inbox/svp.xlsx
+    sheet: 0
+    env: SVP
+
+output:
+  path: out/reconciliation.xlsx
+  main_sheet: Reconciliation
+  # Rows landing in these buckets are copied to a dedicated Exceptions sheet.
+  exception_labels: [MISSING_IN_SVP, MISSING_IN_ESIT, AMOUNT_MISMATCH, STATUS_MISMATCH, OWNER_MISMATCH, REVIEW]
+
+steps:
+  - id: drop_cancelled
+    op: filter_rows
+    applies_to: [esit, svp]
+    column: status
+    operator: not_in
+    value: [CANCELLED, VOID]
+    description: Cancelled and voided requests are out of scope for reconciliation.
+
+  - id: dedupe_sources
+    op: deduplicate
+    applies_to: [esit, svp]
+    keys: [request_id]
+    order_by: submitted_at
+    keep: last
+    description: A changed query can return a request more than once; keep the most recent submission.
+
+  - id: merge
+    op: merge_environments
+    left: esit
+    right: svp
+    keys: [request_id]
+    how: outer
+    compare: [status, amount, currency, owner_email]
+    coalesce: [customer_name, region, submitted_at]
+    description: >
+      Outer join so nothing is silently dropped. Compared fields become
+      <field>_esit / <field>_svp / <field>_match. Coalesced fields take the ESIT
+      value and fall back to SVP.
+
+  - id: amount_delta
+    op: compute
+    target: amount_delta
+    left: amount_esit
+    right: amount_svp
+    operator: subtract
+    decimals: 2
+    description: Signed ESIT-minus-SVP difference, so reviewers can sort by materiality.
+
+  - id: classify
+    op: derive_status
+    target: reconciliation_status
+    default: REVIEW
+    description: First matching rule wins, so order is meaningful.
+    rules:
+      - label: MISSING_IN_SVP
+        all: [{column: _in_svp, operator: eq, value: false}]
+      - label: MISSING_IN_ESIT
+        all: [{column: _in_esit, operator: eq, value: false}]
+      - label: AMOUNT_MISMATCH
+        all: [{column: amount_match, operator: eq, value: false}]
+      - label: STATUS_MISMATCH
+        all: [{column: status_match, operator: eq, value: false}]
+      - label: OWNER_MISMATCH
+        all: [{column: owner_email_match, operator: eq, value: false}]
+      - label: OK
+        all: [{column: _all_match, operator: eq, value: true}]
+
+  - id: severity
+    op: map_values
+    source: reconciliation_status
+    target: severity
+    default: LOW
+    mapping:
+      MISSING_IN_SVP: HIGH
+      MISSING_IN_ESIT: HIGH
+      AMOUNT_MISMATCH: HIGH
+      STATUS_MISMATCH: MEDIUM
+      OWNER_MISMATCH: LOW
+      OK: NONE
+
+  - id: order
+    op: sort
+    by: [severity_rank, request_id]
+    ascending: [true, true]
+    description: severity_rank is derived automatically from severity (HIGH first).
+
+  - id: final_columns
+    op: select_columns
+    columns:
+      - request_id
+      - customer_name
+      - region
+      - reconciliation_status
+      - severity
+      - status_esit
+      - status_svp
+      - amount_esit
+      - amount_svp
+      - amount_delta
+      - currency_esit
+      - currency_svp
+      - owner_email_esit
+      - owner_email_svp
+      - submitted_at
+
+  - id: headers
+    op: rename_output
+    description: Business-facing headers, applied only at the very last step.
+    mapping:
+      request_id: Request ID
+      customer_name: Customer
+      region: Region
+      reconciliation_status: Reconciliation Status
+      severity: Severity
+      status_esit: Status (ESIT)
+      status_svp: Status (SVP)
+      amount_esit: Amount (ESIT)
+      amount_svp: Amount (SVP)
+      amount_delta: Amount Delta
+      currency_esit: Currency (ESIT)
+      currency_svp: Currency (SVP)
+      owner_email_esit: Owner (ESIT)
+      owner_email_svp: Owner (SVP)
+      submitted_at: Submitted At

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xlflow"
+version = "0.1.0"
+description = "Deterministic Excel merge/reconcile pipeline for ESIT + SVP query exports, driven by a committed Copilot agent."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.1",
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+xlflow = "xlflow.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

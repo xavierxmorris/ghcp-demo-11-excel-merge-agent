@@ -1,0 +1,18 @@
+# Working files - never commit real query exports or generated output.
+inbox/*.xlsx
+inbox/*.xlsm
+inbox/*.csv
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Excel lock files
+~$*.xlsx
