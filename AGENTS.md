@@ -28,6 +28,10 @@ python -m pytest -q # 69 tests
 7. Confirm with a human before adding a schema alias - it is a business assertion.
 8. `--no-strict`, `--allow-unparseable` and `allow_formulas: true` are incidents,
    not options. Each turns a hard failure into a silent risk.
+9. **Sample data only, and no database connector.** All data comes from
+   `samples/make_samples.py`; never commit a real export. Never add a database
+   driver, connection string, or credential - the engine reads local files and
+   writes local files, nothing else. `tests/test_repo_contract.py` enforces this.
 
 ## Layout
 

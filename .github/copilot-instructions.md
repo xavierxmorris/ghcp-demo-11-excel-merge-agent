@@ -12,6 +12,16 @@ edits the YAML.
 inbox/*.xlsx  ->  schema.yaml (standardise headers)  ->  pipeline.yaml (ordered steps)  ->  out/*.xlsx + manifest.json
 ```
 
+## Scope constraints (enforced by tests, not just documented)
+
+- **Sample data only.** All data comes from `samples/make_samples.py`. Never
+  commit a real query export. `inbox/` and `out/` are gitignored.
+- **No database connector, deliberately.** This repo holds no driver, DSN,
+  connection string, or credential, and the engine imports no database or
+  network module. Do not add one, even to "make it convenient".
+
+`tests/test_repo_contract.py` fails the build if either is violated.
+
 ## Non-negotiables
 
 - **Never hand-edit an `.xlsx`.** Output is generated. If it is wrong, the config is wrong.
@@ -56,3 +66,11 @@ python -m pytest -q
 
 Tests are run with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` so unrelated globally
 installed pytest plugins cannot break the suite. `.\go.ps1 -Check` does this for you.
+
+## Change control
+
+Config changes go through a PR, not straight to `main`. CI (`.github/workflows/ci.yml`)
+runs `xlflow validate`, `xlflow run`, the tests, and a negative test asserting that
+drifted headers are still rejected. `CODEOWNERS` requires review on `config/`,
+`src/`, `tests/` and the agent definition. Fill in the PR template with the real
+before/after classification counts from `xlflow run` — not estimates.

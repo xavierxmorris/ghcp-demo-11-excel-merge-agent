@@ -10,6 +10,32 @@ inbox/svp.xlsx   ─┘    standardise           ordered steps        + manifest
                        headers                                    (audit trail)
 ```
 
+## Scope: sample data only, and no database connector
+
+Two deliberate constraints, stated up front because they are design decisions
+rather than unfinished work:
+
+- **The data in this repo is entirely synthetic.** `samples/make_samples.py`
+  generates the ESIT and SVP exports. Every customer is fictional and every
+  mailbox is `@contoso.com`, Microsoft's reserved example domain. No real
+  export, extract, or record from any environment is committed here — and
+  `inbox/` and `out/` are gitignored so none can be added by accident.
+- **There is no database connector, on purpose.** This repo holds no driver, no
+  DSN, no connection string, and no credential. It never talks to ESIT or SVP.
+  You run your own SQL however you already do, and drop the result into
+  `inbox/`. That boundary is what makes the repo safe to make public, safe to
+  clone onto any laptop, and safe for an agent to edit.
+
+Both properties are enforced by `tests/test_repo_contract.py`, not merely
+asserted here: the suite fails if a database driver is added to the
+dependencies, if a connection-string-shaped literal appears in tracked source,
+or if the working directories stop being ignored.
+
+The trade-off is honest: fetching query results stays a manual step. Automating
+extraction means credentials, and credentials mean a different security posture
+than "a public repo anyone can clone". That is a separate decision, taken later
+and deliberately, not smuggled in here.
+
 ## The design decision that makes this work
 
 > **The agent edits the YAML. Deterministic Python moves the data. The agent never opens an `.xlsx`.**
@@ -199,8 +225,31 @@ configs, never arbitrary paths or arbitrary YAML.
 | `src/xlflow/` | Engine: `schema`, `ingest`, `steps`, `pipeline`, `writer`, `cli` |
 | `.github/agents/reconciliation.agent.md` | The committed VS Code custom agent |
 | `.github/copilot-instructions.md` | Repo-wide rules for any Copilot surface |
-| `tests/` | 45 tests |
-| `samples/make_samples.py` | Realistic, deliberately messy exports |
+| `.github/workflows/ci.yml` | Merge gate: validate + run + tests + drift check |
+| `.github/CODEOWNERS` | `config/`, `src/`, `tests/` require review |
+| `tests/` | 79 tests, incl. `test_hardening.py` and `test_repo_contract.py` |
+| `samples/make_samples.py` | Synthetic, deliberately messy exports |
+| `inbox/`, `out/` | Gitignored working directories. Never committed. |
+
+## How a change gets reviewed
+
+A wrong rule in `config/` corrupts every row of every future run, silently and
+reproducibly. So config changes go through the same gate as code:
+
+1. The agent edits `config/*.yaml` on a branch and opens a PR.
+2. CI runs `xlflow validate`, `xlflow run`, the test suite, **and** a negative
+   test that deliberately drifts the headers and asserts validation *fails*. If
+   the safety net ever stops working, CI goes red.
+3. `CODEOWNERS` requires a reviewer on `config/`, `src/`, `tests/` and the agent
+   definition — including the tests, because weakening a test is a way to make a
+   bad rule pass.
+4. The PR template asks for the real before/after classification counts, and has
+   a checkbox confirming no escape hatch was introduced.
+5. The workbook and manifest upload as CI artifacts, so a reviewer can open the
+   actual output the change produces.
+
+Enabling branch protection on `main` is the last step, and is a repo setting
+rather than a file: require the CI check and one approving review.
 
 ## Honesty notes
 
@@ -237,29 +286,28 @@ configs, never arbitrary paths or arbitrary YAML.
   `tests/test_hardening.py`. The remaining known gaps are below, unfixed and
   stated plainly.
 - **Verified on** Windows, Python 3.14.2, pandas 3.0.1, openpyxl 3.1.5,
-  PyYAML 6.0.3, on 2026-08-26. 69/69 tests passing; `go.ps1 -Check` and
-  `-Drift` both green.
+  PyYAML 6.0.3, on 2026-08-26. 79/79 tests passing; `go.ps1 -Check` and
+  `-Drift` both green; CI green on Ubuntu and Windows across Python 3.11 / 3.13.
 
 ## Known gaps
 
 Ranked, for anyone taking this to production:
 
 1. **No dependency lock file.** Version ranges are bounded but not pinned, so two
-   laptops can still resolve different pandas builds. Add a lock and an isolated
-   environment bootstrap before this is relied on.
+   laptops can still resolve different pandas builds. CI pins Python versions but
+   not transitive dependencies. Add a lock and an isolated environment bootstrap
+   before this is relied on.
 2. **No extraction step.** Exports are produced and dropped into `inbox/` by
    hand, with no record of which SQL, which environment, or when.
-3. **No CI.** `xlflow validate` returns exit 1 and is built to be a pipeline
-   gate; nothing wires it to one yet.
-4. **Merge disposition is not exhaustive.** A field present in both sources but
+3. **Merge disposition is not exhaustive.** A field present in both sources but
    listed in neither `compare` nor `coalesce` becomes `field_esit`/`field_svp`
    and can be dropped by `select_columns` without warning. Requiring every shared
    field to be explicitly classified would close this.
-5. **Dedupe ties are resolved silently.** Two rows with an identical `order_by`
+4. **Dedupe ties are resolved silently.** Two rows with an identical `order_by`
    value resolve to whichever came later in the file. For financial
    reconciliation an explicit tie policy (error by default) would be safer.
-6. **Rounding happens before comparison.** With `decimals: 2`, `1.004` and
+5. **Rounding happens before comparison.** With `decimals: 2`, `1.004` and
    `1.000` both become `1.00` and compare as equal. That is a deliberate
    financial rule, but it should be an approved one.
-7. **Single merge per pipeline.** Two environments only. A third would need
+6. **Single merge per pipeline.** Two environments only. A third would need
    chained merges or a rework of `merge_environments`.

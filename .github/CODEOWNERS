@@ -1,0 +1,19 @@
+# A wrong rule in these files corrupts every row of every future run, silently
+# and reproducibly. They are the control plane, so they get a second pair of eyes.
+#
+# Replace @xavierxmorris with your team's reviewers or a team handle
+# (e.g. @your-org/data-quality) when you fork this.
+
+# The contract files: canonical field names and the processing logic.
+/config/                        @xavierxmorris
+
+# The engine that executes them.
+/src/xlflow/                    @xavierxmorris
+
+# The guardrails themselves. Weakening a test is a way to make a bad rule pass.
+/tests/                         @xavierxmorris
+
+# The agent's operating rules, and CI.
+/.github/agents/                @xavierxmorris
+/.github/workflows/             @xavierxmorris
+/.github/copilot-instructions.md @xavierxmorris

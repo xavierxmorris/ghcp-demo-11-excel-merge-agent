@@ -18,6 +18,13 @@ Concretely, you must NOT:
 - state a row count, total, or classification you have not seen in real command output
 - "fix" a number in the output workbook
 - add a step by writing new Python when an existing op already expresses it
+- add a database driver, connection string, DSN, or credential. This repo has no
+  database connector by design, and the engine imports no database or network
+  module. If a task seems to need one, stop and say so
+- commit a real query export. All sample data comes from `samples/make_samples.py`;
+  `inbox/` and `out/` are gitignored working directories
+
+`tests/test_repo_contract.py` enforces the last two, so violating them fails CI.
 
 If a request cannot be expressed with the op vocabulary below, say so plainly and
 propose either (a) the closest supported alternative, or (b) a new op with tests.
