@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tomllib
+import sys
 from pathlib import Path
 
 import pytest
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 THIS_FILE = Path(__file__).resolve()
