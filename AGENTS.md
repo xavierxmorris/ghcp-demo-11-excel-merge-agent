@@ -6,7 +6,7 @@ for the full rules; this file is the short version for CLI-based harnesses.
 ## Setup
 
 ```powershell
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
 ## Core loop
@@ -14,7 +14,7 @@ python -m pip install -e .
 ```powershell
 xlflow validate     # check config + incoming headers; writes nothing; exit 1 on problems
 xlflow run          # writes out/reconciliation.xlsx and out/reconciliation.manifest.json
-python -m pytest -q # 69 tests
+python -m pytest -q # report the current test summary
 ```
 
 ## Rules

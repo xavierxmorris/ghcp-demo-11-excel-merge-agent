@@ -3,6 +3,10 @@
 Turns "paste two query exports into Excel and retype instructions into Copilot"
 into a versioned pipeline any teammate can `git clone` and run.
 
+**Go deeper:** [WORKSHOP.md](WORKSHOP.md) adds a 60-minute reconciliation lab:
+step-order reasoning, a current drift exercise, business-owned alias decisions,
+classification precedence, and a manifest/evidence review.
+
 ```
 inbox/esit.xlsx  ─┐
                   ├─►  schema.yaml      ─►  pipeline.yaml   ─►  out/reconciliation.xlsx
@@ -17,9 +21,10 @@ rather than unfinished work:
 
 - **The data in this repo is entirely synthetic.** `samples/make_samples.py`
   generates the ESIT and SVP exports. Every customer is fictional and every
-  mailbox is `@contoso.com`, Microsoft's reserved example domain. No real
+  mailbox uses `@contoso.com`, a Microsoft example domain. No real
   export, extract, or record from any environment is committed here — and
-  `inbox/` and `out/` are gitignored so none can be added by accident.
+  `inbox/` and `out/` are gitignored to reduce accidental inclusion. Ignore
+  rules do not prevent force-adding a file; review staged content too.
 - **There is no database connector, on purpose.** This repo holds no driver, no
   DSN, no connection string, and no credential. It never talks to ESIT or SVP.
   You run your own SQL however you already do, and drop the result into
@@ -46,9 +51,9 @@ two config files and forbidden from touching data. You get natural-language
 authoring **and** output that is reproducible from versioned inputs, with an
 audit trail.
 
-Everything the pipeline does is one of ten declarative ops. There is no `eval` of
-model-generated strings anywhere in `src/xlflow/steps.py`, so a bad prompt cannot
-become arbitrary code execution.
+The pipeline dispatches a defined set of declarative operations rather than
+evaluating configuration strings as Python. That constrains the engine's
+configuration surface; it is not a sandbox for the coding agent's other tools.
 
 ### Refusing to be plausibly wrong
 
@@ -61,7 +66,7 @@ looks right and isn't, because nobody checks. These all **stop the run**:
 | Blank join key | Blank joins to blank, merging unrelated records | Fails, names the rows |
 | Duplicate join key | Cartesian fan-out, invented mismatches | Fails, names the key |
 | Unparseable value | Becomes blank — and two blanks compare as **equal**, so both sides "match" | Fails unless `--allow-unparseable` |
-| Formula in a source export | pandas reads the *cached* result; with no cache, `=1000+500` reads as `0` | Fails, tells you to paste as values |
+| Formula in a source export | A cached result can be stale or absent, making a formula look like a value or a blank | Fails, tells you to paste as values |
 | `value: [OFF]` in config | YAML 1.1 parses `OFF` as `false`; filter silently never matches | Loader uses YAML 1.2 booleans |
 | Duplicate YAML key | Last one silently wins, so the reviewer approves different logic | Rejected at load |
 | Typo like `tolerence:` | Ignored; tolerance silently stays 0 | Rejected, suggests `tolerance` |
@@ -73,9 +78,17 @@ Each row above is pinned by a test in `tests/test_hardening.py`.
 ## Quick start
 
 ```powershell
-git clone <this repo>; cd ghcp-demo-11-excel-merge-agent
+git clone https://github.com/xavierxmorris/ghcp-demo-11-excel-merge-agent.git
+Set-Location ghcp-demo-11-excel-merge-agent
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
 .\go.ps1 -Check
 ```
+
+Use a dedicated sample-data clone: the runner regenerates `inbox` fixtures and
+overwrites its generated output. The `dev` extra supplies pytest on a clean
+machine. No Excel installation is needed for the pipeline.
 
 That installs the package, generates realistic sample exports, validates, runs,
 and executes the test suite. Then, in VS Code, open Copilot Chat and pick the
@@ -116,19 +129,20 @@ This is the hard part, and it is handled by refusing to guess.
 
 ```
 $ xlflow validate
-svp (SVP)  9 rows, 9 columns
-  mapped   : 6 header(s)
-  unresolved: ['GROSS_AMOUNT_USD', 'Request Owner', 'Cost Centre']
-# Add each one to the aliases list of the correct field in config/schema.yaml,
-  # <canonical_field>:  aliases: ["GROSS_AMOUNT_USD"]   # suggested key: gross_amount_usd
-
-1 problem(s). Fix config/schema.yaml (add aliases) and re-run `xlflow validate`.
+# Run the current drift fixture and inspect the actual diagnostics:
+python samples\make_samples.py --drift
+xlflow validate
+# Expected unresolved concepts: NET_AMOUNT_EX_VAT, Approver, Legal Entity
 ```
 
-Exit code 1. `xlflow run` refuses too. A new query **cannot** silently produce a
-wrong workbook — the worst outcome in reconciliation work, because nobody
-notices. Fixing it is a one-line PR: add the alias, bump `version`, push, and
-every teammate's laptop understands the new export after a `git pull`.
+Validation exits nonzero and the pipeline refuses the unresolved headers.
+This blocks that class of schema drift; it does not prove all business semantics
+are correct. `NET_AMOUNT_EX_VAT` may not mean gross amount, and `Approver` may
+not mean owner. Obtain a business decision before adding an alias, update the
+merge disposition for new fields, and add regression evidence.
+
+The old `GROSS_AMOUNT_USD` / `Request Owner` / `Cost Centre` example is already
+handled by the shipped schema. It is not today's negative fixture.
 
 Try it: `.\go.ps1 -Drift`.
 
@@ -186,16 +200,16 @@ Worked example from the shipped sample data:
 
 ## Why VS Code and not a Teams agent
 
-Both were considered. For this problem the repo-based agent wins on every axis
-that matters, and it is not close:
+Both were considered. For this local-file sample, the repo-based agent avoids an additional hosted
+integration. Other delivery surfaces have different strengths:
 
 | | Repo + VS Code custom agent | Teams / M365 declarative agent |
 | --- | --- | --- |
 | Reach files on an analyst's laptop | Yes | No |
 | Run this pipeline | Directly | Only by calling a hosted API you build and operate |
-| Reach ESIT / SVP databases | Via tooling you already have | Only through a governed, internet-reachable service |
+| Reach ESIT / SVP databases | Not provided; extraction stays outside this repo | Would need a separately governed integration |
 | Distribute to the team | `git clone` | Tenant app deployment + admin approval |
-| Versioned, reviewable, diffable | Yes, it is a repo | Manifest lives outside your change process |
+| Versioned, reviewable, diffable | Code, config, and agent definition in git | App and agent manifests can also be version-controlled |
 | Licensing | Existing Copilot | M365 Copilot licence or metered usage |
 
 To be precise about the constraint: a declarative agent is
@@ -226,7 +240,7 @@ configs, never arbitrary paths or arbitrary YAML.
 | `.github/agents/reconciliation.agent.md` | The committed VS Code custom agent |
 | `.github/copilot-instructions.md` | Repo-wide rules for any Copilot surface |
 | `.github/workflows/ci.yml` | Merge gate: validate + run + tests + drift check |
-| `.github/CODEOWNERS` | `config/`, `src/`, `tests/` require review |
+| `.github/CODEOWNERS` | Assigns owners for sensitive paths; repository rules must require their review |
 | `tests/` | 79 tests, incl. `test_hardening.py` and `test_repo_contract.py` |
 | `samples/make_samples.py` | Synthetic, deliberately messy exports |
 | `inbox/`, `out/` | Gitignored working directories. Never committed. |
@@ -240,9 +254,9 @@ reproducibly. So config changes go through the same gate as code:
 2. CI runs `xlflow validate`, `xlflow run`, the test suite, **and** a negative
    test that deliberately drifts the headers and asserts validation *fails*. If
    the safety net ever stops working, CI goes red.
-3. `CODEOWNERS` requires a reviewer on `config/`, `src/`, `tests/` and the agent
-   definition — including the tests, because weakening a test is a way to make a
-   bad rule pass.
+3. `CODEOWNERS` identifies reviewers for `config/`, `src/`, `tests/` and the agent
+   definition. Enable required code-owner review in repository rules to enforce
+   it, including for tests: weakening a test can make a bad rule pass.
 4. The PR template asks for the real before/after classification counts, and has
    a checkbox confirming no escape hatch was introduced.
 5. The workbook and manifest upload as CI artifacts, so a reviewer can open the

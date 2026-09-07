@@ -33,7 +33,7 @@ if ($Manual) {
     Write-Host @'
 Manual walkthrough
 ------------------
- 1. python -m pip install -e .
+ 1. python -m pip install -e ".[dev]"
  2. python samples\make_samples.py        # writes inbox\esit.xlsx and inbox\svp.xlsx
  3. xlflow fields                         # the shared vocabulary
  4. xlflow explain                        # the pipeline, in plain English
@@ -41,7 +41,8 @@ Manual walkthrough
  6. xlflow run                            # writes out\reconciliation.xlsx (+ manifest)
  7. python samples\make_samples.py --drift # simulate a rewritten SQL query
  8. xlflow validate                       # now FAILS, naming the unresolved headers
- 9. Add the aliases it suggests to config\schema.yaml, bump version, repeat step 5.
+ 9. Confirm each header's business meaning with the owner before adding aliases.
+10. After approval, update merge dispositions/tests, bump version, and validate.
 '@
     return
 }

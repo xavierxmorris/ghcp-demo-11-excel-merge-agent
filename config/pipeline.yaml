@@ -1,8 +1,9 @@
 # The "stable set of instructions, in step-by-step logic".
 #
 # This file replaces the paragraph you currently retype into Copilot-in-Excel.
-# It is declarative, reviewable in a pull request, and produces byte-identical
-# output for identical input. The agent EDITS this file; the Python code EXECUTES it.
+# It is declarative and reviewable, and produces equivalent data for identical
+# inputs/config. Workbook timestamps and packaging are not byte-identical.
+# The agent EDITS this file; the Python code EXECUTES it.
 #
 # Run:  xlflow run --config config/pipeline.yaml
 

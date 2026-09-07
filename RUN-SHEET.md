@@ -9,7 +9,10 @@ cd ghcp-demo-11-excel-merge-agent
 .\go.ps1 -Check
 ```
 
-Expect: install → samples → validate OK → run → `45 passed`. Leave the terminal open.
+Use a dedicated synthetic-data clone and the README's isolated environment
+with the `dev` extra installed. Expect install -> samples -> validate -> run ->
+the actual pytest summary. Quote that run's count, not an old fixed number.
+For the full participant lab, see [WORKSHOP.md](WORKSHOP.md).
 
 ---
 
@@ -48,8 +51,9 @@ and show three cells specifically:
   reconciliation."
 
 Then the **Run Log** sheet: input SHA-256s and per-step row counts. **Say:**
-"This is what Copilot-in-Excel cannot give you — six months later, you can prove
-where a number came from."
+"This pipeline records input hashes and processing steps, so a later reviewer
+can identify the inputs and configuration used. Retain those inputs as well;
+a hash does not reconstruct a deleted source file."
 
 ---
 
@@ -60,17 +64,26 @@ where a number came from."
 ```
 
 Validation **fails**, names `NET_AMOUNT_EX_VAT`, `Approver`, `Legal Entity`, and
-prints a paste-ready alias block. Exit code 1.
+prints suggested mappings. The inner validation exits nonzero. The `-Drift`
+runner treats that rejection as expected, restores clean samples, and completes
+successfully. It does not leave the drifted input in place for a live repair.
 
 **Say:** "This is the whole point. The dangerous outcome isn't an error — it's a
-workbook that looks fine and is wrong. It refuses. And the fix is one line."
+workbook that looks fine and is wrong. It refuses. The next step is a business
+decision, not blindly accepting an alias."
 
-Live-fix it in Copilot Chat with the **Reconciliation Pipeline** agent:
+For an interactive diagnosis, regenerate drifted samples in the dedicated
+clone with `python samples\make_samples.py --drift`, then ask the
+**Reconciliation Pipeline** agent:
 
-> A new SVP export just landed and validation is failing. Fix the schema.
+> Diagnose the unresolved sample headers. Do not edit aliases yet. Explain
+> why NET_AMOUNT_EX_VAT may differ from amount and Approver from owner_email.
+> Identify the business decisions and merge dispositions needed before a fix.
 
-Watch it edit `config/schema.yaml` only, bump `version`, re-validate, re-run.
-Show `git diff` — a two-line change, reviewable by a colleague.
+After explicit semantic approval, an alias change needs a version bump and
+regression evidence. If meanings differ, do not alias them merely to make the
+run succeed. Restore synthetic inputs with `python samples\make_samples.py`
+when the exercise is finished.
 
 ---
 
@@ -83,8 +96,9 @@ code moves the data. You never move data yourself."*
 agent, same rules, same pipeline. Nobody is retyping instructions and hoping."
 
 Then the comparison table in `README.md`. Land it: a declarative Teams agent is
-configuration-not-code running in Microsoft's cloud — it can't reach ESIT/SVP or
-run a pipeline on a laptop.
+configuration running in Microsoft's cloud. Running this exact laptop pipeline
+through it would need a separately designed, governed integration; no such
+integration is part of this sample.
 
 ---
 
